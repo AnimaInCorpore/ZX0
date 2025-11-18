@@ -68,10 +68,12 @@
             <h3>Compression Options</h3>
             <label><input type="checkbox" id="quickMode"> Quick Mode</label>
             <label><input type="checkbox" id="backwardsMode"> Backwards Mode</label>
+            <label><input type="checkbox" id="useWebGPU"> Use WebGPU (if available)</label>
             <label><input type="checkbox" id="classicMode"> Classic Mode</label>
             <br><br>
             <button id="compressBtn">Compress</button>
             <button id="decompressBtn">Decompress</button>
+            <button id="runBenchmark">Run GPU vs CPU Benchmark</button>
 
             <div id="output" style="margin-top: 20px;"></div>
         </div>
@@ -176,10 +178,11 @@
                 outputDiv.innerHTML = 'Compressing...';
 
                 // Use setTimeout to allow UI to update
-                setTimeout(() => {
+                setTimeout(async () => {
                     try {
                         const startTime = performance.now();
-                        const result = compressData(inputData, 0, quickMode, backwardsMode, classicMode);
+                            const useWebGPU = document.getElementById('useWebGPU').checked;
+                            const result = await compressData(inputData, 0, quickMode, backwardsMode, classicMode, useWebGPU);
                         const endTime = performance.now();
 
                         const compressedData = result.output;
@@ -211,7 +214,29 @@
                 }, 100);
             });
 
-            document.getElementById('decompressBtn').addEventListener('click', async () => {
+                document.getElementById('runBenchmark').addEventListener('click', async () => {
+                    if (!currentInputData) {
+                        alert('Please select a file first.');
+                        return;
+                    }
+
+                    const bench = await import('./bench.js');
+                    const outputDiv = document.getElementById('output');
+                    outputDiv.innerHTML = 'Running GPU benchmark...';
+                    try {
+                        const cpuRes = await bench.runBenchmark(currentInputData, 2, false, quickMode, backwardsMode, classicMode);
+                        const gpuRes = await bench.runBenchmark(currentInputData, 2, true, quickMode, backwardsMode, classicMode);
+                        outputDiv.innerHTML = `<h3>Benchmark</h3>
+                            <p>Input size: ${currentInputData.length} bytes</p>
+                            <p>CPU avg: ${cpuRes.avg.toFixed(2)} ms (${cpuRes.times.map(t=>t.toFixed(1)).join(', ')})</p>
+                            <p>GPU avg: ${gpuRes.avg.toFixed(2)} ms (${gpuRes.times.map(t=>t.toFixed(1)).join(', ')})</p>`;
+                    } catch (e) {
+                        outputDiv.innerHTML = `<p style="color:red;">Benchmark failed: ${e.message}</p>`;
+                        console.error(e);
+                    }
+                });
+
+            document.getElementById('decompressBtn').addEventListener('click', () => {
                 const outputDiv = document.getElementById('output');
 
                 if (!currentInputData) {

@@ -14,7 +14,7 @@ function elias_gamma_bits(value) {
     return bits;
 }
 
-export function optimize(input_data, input_size, skip, offset_limit, verbose = false) {
+export async function optimize(input_data, input_size, skip, offset_limit, verbose = false, webgpu = false) {
     let last_literal = [];
     let last_match = [];
     let optimal = [];
@@ -41,10 +41,47 @@ export function optimize(input_data, input_size, skip, offset_limit, verbose = f
 
     let dots = 2;
 
+    // Optional WebGPU precomputation: try to compute a single best match per index.
+    let gpuMatches = null;
+    const GPU_THRESHOLD = 65536; // only use on larger inputs
+    if (webgpu && input_size >= GPU_THRESHOLD) {
+        try {
+            const { offsets, lengths } = await import('./gpu_optimize.js').then(m => m.gpuOptimize(input_data, input_size, skip, offset_limit));
+            gpuMatches = { offsets, lengths };
+        } catch (e) {
+            // Ignore GPU errors and fallback to CPU
+            if (verbose) console.warn('WebGPU optimize failed, falling back to CPU:', e);
+            gpuMatches = null;
+        }
+    }
+
     for (let index = skip; index < input_size; index++) {
         let best_length_size = 2;
         max_offset = offset_ceiling(index, offset_limit);
-        for (let offset = 1; offset <= max_offset; offset++) {
+            // If WebGPU provided a candidate for this index, try it first
+            if (gpuMatches) {
+                let gOff = gpuMatches.offsets[index];
+                let gLen = gpuMatches.lengths[index];
+                if (gOff && gLen > 1 && gOff <= max_offset) {
+                    // emulate a match-length entry found by GPU for this offset
+                    match_length[gOff] = gLen;
+                    let length = gLen;
+                    if (best_length_size < length) {
+                        // setup best_length array similar to CPU flow
+                        best_length_size = length;
+                        best_length[length] = length;
+                    }
+                    let bits = optimal[index - length].bits + 8 + elias_gamma_bits(Math.floor((gOff - 1) / 128) + 1) + elias_gamma_bits(length - 1);
+                    if (!last_match[gOff] || last_match[gOff].index !== index || last_match[gOff].bits > bits) {
+                        assign(last_match, gOff, allocate(bits, index, gOff, optimal[index - length]));
+                        if (!optimal[index] || optimal[index].bits > bits)
+                            assign(optimal, index, last_match[gOff]);
+                    }
+                    // we will still try the full offset loop for safety, but skip the GPU offset next.
+                }
+            }
+
+            for (let offset = 1; offset <= max_offset; offset++) {
             if (index !== skip && index >= offset && input_data[index] === input_data[index - offset]) {
                 // copy from last offset
                 if (last_literal[offset]) {

@@ -20,7 +20,7 @@ export function decompressData(input_data, classic_mode = false) {
     return decompress(input_data, classic_mode);
 }
 
-export function compressData(input_data, skip = 0, quick_mode = false, backwards_mode = false, classic_mode = false) {
+export async function compressData(input_data, skip = 0, quick_mode = false, backwards_mode = false, classic_mode = false, useWebGPU = false) {
     // input_data should be Uint8Array
     let input_size = input_data.length;
 
@@ -44,7 +44,7 @@ export function compressData(input_data, skip = 0, quick_mode = false, backwards
     let output_size_ref = { value: 0 };
     let delta_ref = { value: 0 };
 
-    let optimal = optimize(input_buffer, input_size, skip, quick_mode ? MAX_OFFSET_ZX7 : MAX_OFFSET_ZX0);
+    let optimal = await optimize(input_buffer, input_size, skip, quick_mode ? MAX_OFFSET_ZX7 : MAX_OFFSET_ZX0, false, useWebGPU);
     let output_data = compress(optimal, input_buffer, input_size, skip, backwards_mode ? 1 : 0, (!classic_mode && !backwards_mode) ? 1 : 0, output_size_ref, delta_ref);
 
     if (backwards_mode) {
