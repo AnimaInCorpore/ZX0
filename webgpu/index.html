@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZX0 JS Compressor</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        textarea {
+            width: 100%;
+            height: 100px;
+        }
+
+        button {
+            padding: 10px 20px;
+            cursor: pointer;
+        }
+
+        #dropZone {
+            border: 3px dashed #ccc;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            background: #f9f9f9;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        #dropZone.dragover {
+            border-color: #4CAF50;
+            background: #e8f5e9;
+        }
+
+        #dropZone:hover {
+            border-color: #999;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>ZX0 JS Compressor</h1>
+        <p>Select a file to compress using the ported ZX0 JavaScript library.</p>
+
+        <div style="border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
+            <h3>Option 1: Drag & Drop File Here</h3>
+            <div id="dropZone">
+                <p style="margin: 0; font-size: 1.2em;">📁 Drag and drop a file here</p>
+                <p style="margin: 10px 0 0 0; color: #666;">or click to browse</p>
+            </div>
+            <input type="file" id="fileInput" style="display: none;">
+            <div id="fileInfo" style="margin: 10px 0; font-style: italic; color: #555;"></div>
+        </div>
+
+        <!-- Option 2 removed: Use drag & drop only for local files to avoid browser security limitations -->
+
+        <div style="background: #f9f9f9; padding: 15px; border-radius: 5px;">
+            <h3>Compression Options</h3>
+            <label><input type="checkbox" id="quickMode"> Quick Mode</label>
+            <label><input type="checkbox" id="backwardsMode"> Backwards Mode</label>
+            <label><input type="checkbox" id="classicMode"> Classic Mode</label>
+            <br><br>
+            <button id="compressBtn">Compress</button>
+            <button id="decompressBtn">Decompress</button>
+
+            <div id="output" style="margin-top: 20px;"></div>
+        </div>
+
+        <script type="module">
+            import { compressData, decompressData } from './zx0.js';
+
+            let currentInputData = null;
+            let currentFileName = '';
+
+            // Handle file loading (used by both drag-drop and file picker)
+            function handleFile(file) {
+                document.getElementById('fileInfo').textContent = `Selected: ${file.name} (${file.size} bytes, type: ${file.type})`;
+                currentFileName = file.name;
+
+                const reader = new FileReader();
+                reader.onload = function (e) {
+                    const buffer = e.target.result;
+                    currentInputData = new Uint8Array(buffer);
+                    // file successfully read into memory
+
+                    if (currentInputData.length === 0) {
+                        document.getElementById('fileInfo').innerHTML += ' <span style="color:red;">[Empty Content]</span>';
+                        document.getElementById('fileInfo').innerHTML += '<br><small style="color:#d9534f"><b>Note:</b> Your browser blocked access to this file; try relaunching in an external browser if problem persists.</small>';
+                    } else {
+                        document.getElementById('fileInfo').innerHTML += ' <span style="color:green;">[Read Success: ' + currentInputData.length + ' bytes]</span>';
+                    }
+
+                    // urlInfo removed
+                };
+                reader.onerror = function (e) {
+                    console.error("Error reading file:", e);
+                    document.getElementById('fileInfo').innerHTML += ` <span style="color:red;">[Read Error: ${reader.error}]</span>`;
+                    currentInputData = null;
+                };
+                reader.readAsArrayBuffer(file);
+            }
+
+            // Drag and drop handlers
+            const dropZone = document.getElementById('dropZone');
+
+            dropZone.addEventListener('click', () => {
+                document.getElementById('fileInput').click();
+            });
+
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.add('dragover');
+            });
+
+            dropZone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.remove('dragover');
+            });
+
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.remove('dragover');
+
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handleFile(files[0]);
+                }
+            });
+
+            document.getElementById('fileInput').addEventListener('change', (event) => {
+                const file = event.target.files[0];
+                if (file) {
+                    handleFile(file);
+                } else {
+                    document.getElementById('fileInfo').textContent = '';
+                    currentInputData = null;
+                }
+            });
+
+            // Server-loading and sample-specific code removed; drag-and-drop is the primary flow
+
+            document.getElementById('compressBtn').addEventListener('click', async () => {
+                const outputDiv = document.getElementById('output');
+
+                if (!currentInputData) {
+                    alert('Please select a file first.');
+                    return;
+                }
+
+                if (currentInputData.length === 0) {
+                    if (!confirm("The input data is empty (0 bytes). Do you want to try compressing it anyway?")) {
+                        return;
+                    }
+                }
+
+                const inputData = currentInputData;
+                const file = { name: currentFileName }; // Mock file object for name usage
+
+                const quickMode = document.getElementById('quickMode').checked;
+                const backwardsMode = document.getElementById('backwardsMode').checked;
+                const classicMode = document.getElementById('classicMode').checked;
+
+                outputDiv.innerHTML = 'Compressing...';
+
+                // Use setTimeout to allow UI to update
+                setTimeout(() => {
+                    try {
+                        const startTime = performance.now();
+                        const result = compressData(inputData, 0, quickMode, backwardsMode, classicMode);
+                        const endTime = performance.now();
+
+                        const compressedData = result.output;
+                        const delta = result.delta;
+
+                        outputDiv.innerHTML = `
+                        <h3>Compression Result</h3>
+                        <p>Original size: ${inputData.length} bytes</p>
+                        <p>Compressed size: ${compressedData.length} bytes</p>
+                        <p>Delta: ${delta}</p>
+                        <p>Time: ${(endTime - startTime).toFixed(2)} ms</p>
+                        <button id="downloadBtn">Download .zx0</button>
+                    `;
+
+                        document.getElementById('downloadBtn').addEventListener('click', () => {
+                            const blob = new Blob([compressedData], { type: 'application/octet-stream' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = file.name + '.zx0';
+                            a.click();
+                            URL.revokeObjectURL(url);
+                        });
+
+                    } catch (error) {
+                        console.error(error);
+                        outputDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+                    }
+                }, 100);
+            });
+
+            document.getElementById('decompressBtn').addEventListener('click', async () => {
+                const outputDiv = document.getElementById('output');
+
+                if (!currentInputData) {
+                    alert('Please select a file first.');
+                    return;
+                }
+
+                const inputData = currentInputData;
+                const file = { name: currentFileName };
+
+                const classicMode = document.getElementById('classicMode').checked;
+
+                outputDiv.innerHTML = 'Decompressing...';
+
+                setTimeout(() => {
+                    try {
+                        const startTime = performance.now();
+                        const decompressedData = decompressData(inputData, classicMode);
+                        const endTime = performance.now();
+
+                        outputDiv.innerHTML = `
+                        <h3>Decompression Result</h3>
+                        <p>Original size: ${inputData.length} bytes</p>
+                        <p>Decompressed size: ${decompressedData.length} bytes</p>
+                        <p>Time: ${(endTime - startTime).toFixed(2)} ms</p>
+                        <button id="downloadDecBtn">Download Decompressed</button>
+                    `;
+
+                        document.getElementById('downloadDecBtn').addEventListener('click', () => {
+                            const blob = new Blob([decompressedData], { type: 'application/octet-stream' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = file.name.replace('.zx0', '') + '.bin';
+                            a.click();
+                            URL.revokeObjectURL(url);
+                        });
+
+                    } catch (error) {
+                        console.error(error);
+                        outputDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+                    }
+                }, 100);
+            });
+        </script>
+</body>
+
+</html>
