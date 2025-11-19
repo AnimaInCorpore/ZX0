@@ -16,8 +16,16 @@ function reverse(data, start, end) {
     }
 }
 
-export function decompressData(input_data, classic_mode = false) {
-    return decompress(input_data, classic_mode);
+export function decompressData(input_data, classic_mode = false, backwards_mode = false) {
+    let input_buffer = new Uint8Array(input_data);
+    if (backwards_mode) {
+        input_buffer.reverse();
+    }
+    let output_data = decompress(input_buffer, classic_mode, backwards_mode);
+    if (backwards_mode) {
+        output_data.reverse();
+    }
+    return output_data;
 }
 
 export function compressData(input_data, skip = 0, quick_mode = false, backwards_mode = false, classic_mode = false) {

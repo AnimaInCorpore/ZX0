@@ -55,8 +55,10 @@
         <div style="border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
             <h3>Option 1: Drag & Drop File Here</h3>
             <div id="dropZone">
-                <p style="margin: 0; font-size: 1.2em;">📁 Drag and drop a file here</p>
-                <p style="margin: 10px 0 0 0; color: #666;">or click to browse</p>
+                <label for="fileInput" style="cursor: pointer;">
+                    <p style="margin: 0; font-size: 1.2em;">📁 Drag and drop a file here</p>
+                    <p style="margin: 10px 0 0 0; color: #666;">or click to browse</p>
+                </label>
             </div>
             <input type="file" id="fileInput" style="display: none;">
             <div id="fileInfo" style="margin: 10px 0; font-style: italic; color: #555;"></div>
@@ -69,6 +71,7 @@
             <label><input type="checkbox" id="quickMode"> Quick Mode</label>
             <label><input type="checkbox" id="backwardsMode"> Backwards Mode</label>
             <label><input type="checkbox" id="classicMode"> Classic Mode</label>
+            <p style="font-size: 0.9em; color: #666; margin-top: 5px;">(for decompressing files from older ZX0 versions)</p>
             <br><br>
             <button id="compressBtn">Compress</button>
             <button id="decompressBtn">Decompress</button>
@@ -77,7 +80,7 @@
         </div>
 
         <script type="module">
-            import { compressData, decompressData } from './zx0.js';
+            const worker = new Worker('./worker.js', { type: 'module' });
 
             let currentInputData = null;
             let currentFileName = '';
@@ -150,7 +153,15 @@
                 }
             });
 
-            // Server-loading and sample-specific code removed; drag-and-drop is the primary flow
+            function downloadFile(data, fileName) {
+                const blob = new Blob([data], { type: 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                a.click();
+                URL.revokeObjectURL(url);
+            }
 
             document.getElementById('compressBtn').addEventListener('click', async () => {
                 const outputDiv = document.getElementById('output');
@@ -166,49 +177,22 @@
                     }
                 }
 
-                const inputData = currentInputData;
-                const file = { name: currentFileName }; // Mock file object for name usage
-
                 const quickMode = document.getElementById('quickMode').checked;
                 const backwardsMode = document.getElementById('backwardsMode').checked;
                 const classicMode = document.getElementById('classicMode').checked;
 
                 outputDiv.innerHTML = 'Compressing...';
 
-                // Use setTimeout to allow UI to update
-                setTimeout(() => {
-                    try {
-                        const startTime = performance.now();
-                        const result = compressData(inputData, 0, quickMode, backwardsMode, classicMode);
-                        const endTime = performance.now();
-
-                        const compressedData = result.output;
-                        const delta = result.delta;
-
-                        outputDiv.innerHTML = `
-                        <h3>Compression Result</h3>
-                        <p>Original size: ${inputData.length} bytes</p>
-                        <p>Compressed size: ${compressedData.length} bytes</p>
-                        <p>Delta: ${delta}</p>
-                        <p>Time: ${(endTime - startTime).toFixed(2)} ms</p>
-                        <button id="downloadBtn">Download .zx0</button>
-                    `;
-
-                        document.getElementById('downloadBtn').addEventListener('click', () => {
-                            const blob = new Blob([compressedData], { type: 'application/octet-stream' });
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = file.name + '.zx0';
-                            a.click();
-                            URL.revokeObjectURL(url);
-                        });
-
-                    } catch (error) {
-                        console.error(error);
-                        outputDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+                worker.postMessage({
+                    action: 'compress',
+                    payload: {
+                        inputData: currentInputData,
+                        skip: 0,
+                        quickMode,
+                        backwardsMode,
+                        classicMode
                     }
-                }, 100);
+                });
             });
 
             document.getElementById('decompressBtn').addEventListener('click', async () => {
@@ -219,43 +203,57 @@
                     return;
                 }
 
-                const inputData = currentInputData;
-                const file = { name: currentFileName };
-
                 const classicMode = document.getElementById('classicMode').checked;
+                const backwardsMode = document.getElementById('backwardsMode').checked;
 
                 outputDiv.innerHTML = 'Decompressing...';
 
-                setTimeout(() => {
-                    try {
-                        const startTime = performance.now();
-                        const decompressedData = decompressData(inputData, classicMode);
-                        const endTime = performance.now();
+                worker.postMessage({
+                    action: 'decompress',
+                    payload: {
+                        inputData: currentInputData,
+                        classicMode,
+                        backwardsMode
+                    }
+                });
+            });
 
-                        outputDiv.innerHTML = `
+            worker.onmessage = function(e) {
+                const { status, action, payload } = e.data;
+                const outputDiv = document.getElementById('output');
+
+                if (status === 'error') {
+                    console.error(payload);
+                    outputDiv.innerHTML = `<p style="color: red;">Error in ${action}: ${payload}</p>`;
+                    return;
+                }
+
+                if (action === 'compress') {
+                    const { output: compressedData, delta } = payload;
+                    outputDiv.innerHTML = `
+                        <h3>Compression Result</h3>
+                        <p>Original size: ${currentInputData.length} bytes</p>
+                        <p>Compressed size: ${compressedData.length} bytes</p>
+                        <p>Delta: ${delta}</p>
+                        <button id="downloadBtn">Download .zx0</button>
+                    `;
+                    document.getElementById('downloadBtn').addEventListener('click', () => {
+                        downloadFile(compressedData, currentFileName + '.zx0');
+                    });
+                } else if (action === 'decompress') {
+                    const decompressedData = payload;
+                    outputDiv.innerHTML = `
                         <h3>Decompression Result</h3>
-                        <p>Original size: ${inputData.length} bytes</p>
+                        <p>Original size: ${currentInputData.length} bytes</p>
                         <p>Decompressed size: ${decompressedData.length} bytes</p>
-                        <p>Time: ${(endTime - startTime).toFixed(2)} ms</p>
                         <button id="downloadDecBtn">Download Decompressed</button>
                     `;
-
-                        document.getElementById('downloadDecBtn').addEventListener('click', () => {
-                            const blob = new Blob([decompressedData], { type: 'application/octet-stream' });
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = file.name.replace('.zx0', '') + '.bin';
-                            a.click();
-                            URL.revokeObjectURL(url);
-                        });
-
-                    } catch (error) {
-                        console.error(error);
-                        outputDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
-                    }
-                }, 100);
-            });
+                    document.getElementById('downloadDecBtn').addEventListener('click', () => {
+                        const newName = currentFileName.endsWith('.zx0') ? currentFileName.slice(0, -4) : currentFileName + '.bin';
+                        downloadFile(decompressedData, newName);
+                    });
+                }
+            };
         </script>
 </body>
 
