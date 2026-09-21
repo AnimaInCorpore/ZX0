@@ -1,11 +1,9 @@
 import { allocate, assign } from './memory.js';
+import { gpuFullOptimize } from './gpu_full_optimize.js';
 
 const INITIAL_OFFSET = 1;
+const N_BEST = 8; // Should match the value in gpu_full_optimize.js
 const MAX_SCALE = 50;
-
-function offset_ceiling(index, offset_limit) {
-    return index > offset_limit ? offset_limit : index < INITIAL_OFFSET ? INITIAL_OFFSET : index;
-}
 
 function elias_gamma_bits(value) {
     let bits = 1;
@@ -14,7 +12,12 @@ function elias_gamma_bits(value) {
     return bits;
 }
 
-export async function optimize(input_data, input_size, skip, offset_limit, verbose = false, webgpu = false) {
+function offset_ceiling(index, offset_limit) {
+    return index > offset_limit ? offset_limit : index < INITIAL_OFFSET ? INITIAL_OFFSET : index;
+}
+
+function cpu_optimize(input_data, input_size, skip, offset_limit, verbose = false) {
+    console.log("Using CPU fallback for optimization.");
     let last_literal = [];
     let last_match = [];
     let optimal = [];
@@ -23,67 +26,19 @@ export async function optimize(input_data, input_size, skip, offset_limit, verbo
 
     let max_offset = offset_ceiling(input_size - 1, offset_limit);
 
-    // Initialize arrays
-    // In JS arrays are sparse/dynamic, but for performance and direct indexing we can pre-fill or just let them grow.
-    // C uses calloc, so 0/NULL initialized.
-    // last_literal, last_match, optimal are arrays of Blocks (pointers).
-    // match_length, best_length are arrays of ints.
-
-    // We need to be careful with array sizes if we want to match C exactly, but JS handles it.
-
     if (input_size > 2)
         best_length[2] = 2;
 
-    // assign(&last_match[INITIAL_OFFSET], allocate(-1, skip-1, INITIAL_OFFSET, NULL));
     assign(last_match, INITIAL_OFFSET, allocate(-1, skip - 1, INITIAL_OFFSET, null));
 
     if (verbose) console.log("[");
-
     let dots = 2;
-
-    // Optional WebGPU precomputation: try to compute a single best match per index.
-    let gpuMatches = null;
-    const GPU_THRESHOLD = 65536; // only use on larger inputs
-    if (webgpu && input_size >= GPU_THRESHOLD) {
-        try {
-            const { offsets, lengths } = await import('./gpu_optimize.js').then(m => m.gpuOptimize(input_data, input_size, skip, offset_limit));
-            gpuMatches = { offsets, lengths };
-        } catch (e) {
-            // Ignore GPU errors and fallback to CPU
-            if (verbose) console.warn('WebGPU optimize failed, falling back to CPU:', e);
-            gpuMatches = null;
-        }
-    }
 
     for (let index = skip; index < input_size; index++) {
         let best_length_size = 2;
         max_offset = offset_ceiling(index, offset_limit);
-            // If WebGPU provided a candidate for this index, try it first
-            if (gpuMatches) {
-                let gOff = gpuMatches.offsets[index];
-                let gLen = gpuMatches.lengths[index];
-                if (gOff && gLen > 1 && gOff <= max_offset) {
-                    // emulate a match-length entry found by GPU for this offset
-                    match_length[gOff] = gLen;
-                    let length = gLen;
-                    if (best_length_size < length) {
-                        // setup best_length array similar to CPU flow
-                        best_length_size = length;
-                        best_length[length] = length;
-                    }
-                    let bits = optimal[index - length].bits + 8 + elias_gamma_bits(Math.floor((gOff - 1) / 128) + 1) + elias_gamma_bits(length - 1);
-                    if (!last_match[gOff] || last_match[gOff].index !== index || last_match[gOff].bits > bits) {
-                        assign(last_match, gOff, allocate(bits, index, gOff, optimal[index - length]));
-                        if (!optimal[index] || optimal[index].bits > bits)
-                            assign(optimal, index, last_match[gOff]);
-                    }
-                    // we will still try the full offset loop for safety, but skip the GPU offset next.
-                }
-            }
-
-            for (let offset = 1; offset <= max_offset; offset++) {
+        for (let offset = 1; offset <= max_offset; offset++) {
             if (index !== skip && index >= offset && input_data[index] === input_data[index - offset]) {
-                // copy from last offset
                 if (last_literal[offset]) {
                     let length = index - last_literal[offset].index;
                     let bits = last_literal[offset].bits + 1 + elias_gamma_bits(length);
@@ -91,7 +46,6 @@ export async function optimize(input_data, input_size, skip, offset_limit, verbo
                     if (!optimal[index] || optimal[index].bits > bits)
                         assign(optimal, index, last_match[offset]);
                 }
-                // copy from new offset
                 if (!match_length[offset]) match_length[offset] = 0;
                 if (++match_length[offset] > 1) {
                     if (best_length_size < match_length[offset]) {
@@ -116,7 +70,6 @@ export async function optimize(input_data, input_size, skip, offset_limit, verbo
                     }
                 }
             } else {
-                // copy literals
                 match_length[offset] = 0;
                 if (last_match[offset]) {
                     let length = index - last_match[offset].index;
@@ -129,12 +82,69 @@ export async function optimize(input_data, input_size, skip, offset_limit, verbo
         }
 
         if (verbose && (index * MAX_SCALE / input_size > dots)) {
-            // process.stdout.write("."); // Node.js specific
             dots++;
         }
     }
 
     if (verbose) console.log("]");
-
     return optimal[input_size - 1];
+}
+
+export async function optimize(input_data, input_size, skip, offset_limit, verbose = false, useWebGPU = false) {
+    if (useWebGPU) {
+        try {
+            const optimal = [];
+            assign(optimal, skip - 1, allocate(0, skip - 1, 0, null));
+
+            const gpuCandidates = await gpuFullOptimize(input_data, input_size, skip, offset_limit);
+
+            let last_offset = INITIAL_OFFSET;
+
+            for (let index = skip; index < input_size; index++) {
+                const prev_optimal_literal = optimal[index - 1];
+                let best_bits = (prev_optimal_literal?.bits || 0) + 1 + elias_gamma_bits(1) + 8;
+                let best_offset = 0;
+                let best_len = 1;
+                let best_prev_optimal = prev_optimal_literal;
+
+                for (let i = 0; i < N_BEST; i++) {
+                    const cand_len = gpuCandidates[(index * N_BEST + i) * 2];
+                    const cand_offset = gpuCandidates[(index * N_BEST + i) * 2 + 1];
+
+                    if (cand_len === 0) break;
+                    if (index < cand_len) continue;
+
+                    const prev_optimal = optimal[index - cand_len];
+                    if (!prev_optimal) continue;
+
+                    let bits;
+                    if (cand_offset === last_offset) {
+                        bits = prev_optimal.bits + 1 + elias_gamma_bits(cand_len);
+                    } else {
+                        bits = prev_optimal.bits + 9 + elias_gamma_bits(Math.floor((cand_offset - 1) / 128) + 1) + elias_gamma_bits(cand_len - 1);
+                    }
+
+                    if (bits < best_bits) {
+                        best_bits = bits;
+                        best_offset = cand_offset;
+                        best_len = cand_len;
+                        best_prev_optimal = prev_optimal;
+                    }
+                }
+
+                if (best_offset !== 0) {
+                    last_offset = best_offset;
+                }
+                
+                assign(optimal, index, allocate(best_bits, index, best_offset, best_prev_optimal));
+            }
+
+            return optimal[input_size - 1];
+        } catch (error) {
+            console.warn("WebGPU optimization failed, falling back to CPU:", error);
+            return cpu_optimize(input_data, input_size, skip, offset_limit, verbose);
+        }
+    } else {
+        return cpu_optimize(input_data, input_size, skip, offset_limit, verbose);
+    }
 }

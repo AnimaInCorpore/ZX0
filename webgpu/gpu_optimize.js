@@ -50,8 +50,8 @@ struct Params {
 @group(0) @binding(2) var<uniform> params : Params;
 
 fn get_byte(idx: u32) -> u32 {
-    let u32_idx = idx / 4u;
-    let byte_shift = (idx % 4u) * 8u;
+    let u32_idx = idx >> 2u;
+    let byte_shift = (idx & 3u) * 8u;
     return (inputData[u32_idx] >> byte_shift) & 0xFFu;
 }
 
@@ -126,9 +126,9 @@ fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
       pass.dispatchWorkgroups(workgroupCount);
       pass.end();
       device.queue.submit([encoder.finish()]);
-      // Small pause by awaiting a tick - ensures work is submitted before next tile
-      await device.queue.onSubmittedWorkDone();
     }
+    // Wait for all submitted dispatches to complete
+    await device.queue.onSubmittedWorkDone();
 
     // read back result
     const readBuffer = device.createBuffer({
